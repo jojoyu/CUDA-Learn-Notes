@@ -26,6 +26,10 @@ template<
          const int kStage, 
          const int kPad
          >
+// __launch_bounds__ 是一个 CUDA 编译器指令，用于：
+// 指定每个线程块(thread block)中的最大线程数
+// 这里设置为 WARP_SIZE * kMmaTileSeqLenQ * kMmaTileSeqLenK
+// 通过显式指定线程数限制，编译器可以优化寄存器使用，提高性能
 __global__ void __launch_bounds__(
   WARP_SIZE * kMmaTileSeqLenQ * kMmaTileSeqLenK) 
 flash_attn_mma_stages_split_kv_kernel(half* Q, 
@@ -70,8 +74,8 @@ flash_attn_mma_stages_split_kv_kernel(half* Q,
   // |  [64,64]  |    warp_KV 0    |    warp_KV 1    |    warp_KV 2    |    warp_KV 3    |
   // | warp_QP 0 |-- MMA 0,MMA 0 --|-- MMA 2,MMA 2 --|-- MMA 4,MMA 4 --|-- MMA 6,MMA 6 --|
   // | warp_QP 0 |-- MMA 0,MMA 0 --|-- MMA 2,MMA 2 --|-- MMA 4,MMA 4 --|-- MMA 6,MMA 6 --|
-  // | warp_QP 1 |-- MMA 1,MMA 1 --|-- MMA 3,MMA 2 --|-- MMA 5,MMA 5 --|-- MMA 7,MMA 7 --|
-  // | warp_QP 1 |-- MMA 1,MMA 1 --|-- MMA 3,MMA 2 --|-- MMA 5,MMA 5 --|-- MMA 7,MMA 7 --|
+  // | warp_QP 1 |-- MMA 1,MMA 1 --|-- MMA 3,MMA 3 --|-- MMA 5,MMA 5 --|-- MMA 7,MMA 7 --|
+  // | warp_QP 1 |-- MMA 1,MMA 1 --|-- MMA 3,MMA 3 --|-- MMA 5,MMA 5 --|-- MMA 7,MMA 7 --|
   // gridDim.y = head_num, gridDim.z = N/Br = Tr.
   const int Q_gmem_offset = ((QKV_batch_id * QKV_head * QKV_seqlen * kHeadDim) + 
                              (QKV_head_id * QKV_seqlen * kHeadDim)); // Q [seqlen,d]
@@ -293,6 +297,7 @@ flash_attn_mma_stages_split_kv_kernel(half* Q,
     // NOTE: K[Bc,d] with row major means K^T[d,Bc] in col major.
     // S_tile[Br,Bc]=Q_tile[Br,d]@K[Bc,d]
     fill_3D_regs<uint32_t, kWarpTileSeqLenQ, kWarpTileSeqLenK, 2>(R_S, 0);
+    // printf("tile_K_total=%d, kWarpTileSeqLenQ=%d, kWarpTileSeqLenK=%d.\n", kHeadDim / kMmaAtomK, kWarpTileSeqLenQ, kWarpTileSeqLenK);
     #pragma unroll
     for (int tile_K_d = 0; tile_K_d < (kHeadDim / kMmaAtomK); ++tile_K_d) {
       // smem -> reg, load m16k16 smem Q, offset d according tile_K_d.
@@ -306,6 +311,15 @@ flash_attn_mma_stages_split_kv_kernel(half* Q,
             smem_Q_base_ptr + (lane_smem_Q_Br * (kHeadDim + kPad) + 
                                lane_smem_Q_d) * sizeof(half)
         );
+
+        // if (tile_K_d == 0 && blockIdx.x == 0)
+        // {
+        //   printf("i:%d, warp_QP:%d, Address of Q: 0x%x, tile_K_d:%d, blockIdx.x:%d, threadIdx.x:%d.\n", i, warp_QP, lane_smem_Q_ptr, tile_K_d, blockIdx.x, threadIdx.x);
+        // }
+
+        // LDMATRIX_X4 = ldmatrix.sync.aligned.x4.m8n8.shared.b16
+        // 他的意思就是让一个warp中的32个线程，从shared memory中加载4个8*8的矩阵，矩阵的元素仍然是16位！
+        // 也就是1个16 * 16的矩阵。warp内就是（kWarpTileSeqLenQ = 2）个16*16的矩阵
         LDMATRIX_X4(R_Q[i][0], R_Q[i][1], R_Q[i][2], R_Q[i][3], 
                     lane_smem_Q_ptr); // now, R_Q
       }
@@ -324,14 +338,36 @@ flash_attn_mma_stages_split_kv_kernel(half* Q,
                                lane_smem_K_Bc * (kHeadDim + kPad) + 
                                lane_smem_K_d) * sizeof(half)
         );
-        LDMATRIX_X2(R_K[j][0], R_K[j][1], lane_smem_K_ptr); // R_K
+
+        // if (tile_K_d == 0 && blockIdx.x == 0)
+        // {
+        //   printf("j:%d, warp_KV:%d, Address of K: 0x%x, tile_K_d:%d, blockIdx.x:%d, threadIdx.x:%d.\n", j, warp_KV, lane_smem_K_ptr, tile_K_d, blockIdx.x, threadIdx.x);
+        // }
+
+        // LDMATRIX_X2 = ldmatrix.sync.aligned.x2.m8n8.shared.b16
+        // 他的意思就是让一个warp中的32个线程，从shared memory中加载2个8*8的矩阵，矩阵的元素仍然是16位！
+        // 也就是2个8 * 8的矩阵，1个16*8的矩阵（^T）。warp内就是（kWarpTileSeqLenK = 2）个16*8的矩阵。
+        // 数据都从shared memory中加载寄存器LDMATRIX_X2
+             LDMATRIX_X2(R_K[j][0], R_K[j][1], lane_smem_K_ptr); // R_K
       } // end for kWarpTileSeqLenK
 
-      // MMA compute
+      // MMA compute 
+      // 一个warp的32个线程，调用4次m16n8k16
       #pragma unroll
       for (int i = 0; i < kWarpTileSeqLenQ; ++i) {
         #pragma unroll
         for (int j = 0; j < kWarpTileSeqLenK; ++j) {
+          //HMMA16816 = mma.sync.aligned.m16n8k16.row.col.f16.f16.f16.f16是HMMA操作的指令.
+          // m16n8k16表示使用16x16 vs 16x8的原子操作，按行列顺序执行，操作的数据类型为半精度浮点数。
+
+          // mma.sync.aligned.m16n8k16.row.col.f16.f16.f16.f16 是一个 CUDA 的矩阵乘法累加（MMA）指令
+          // 具体含义如下：
+          // m16n8k16：表示矩阵维度，执行 16×8 的输出，内部累加维度为 16
+          // row.col：表示矩阵的布局方式，第一个矩阵按行布局，第二个矩阵按列布局
+          // f16.f16.f16.f16：表示所有输入和输出都使用 FP16（半精度浮点数）格式
+
+          // 通过这个 HMMA 操作，输入矩阵 RQ（16*16） 和 RK（16*8） 的元素会进行矩阵乘法运算，并将结果累加到输出矩阵 RS 的对应位置（最后两个值）。
+          // 最后，结果存储在输出寄存器 RS0 和 RS1 中（前面两个值）。
           HMMA16816(R_S[i][j][0], R_S[i][j][1], 
                     R_Q[i][0],    R_Q[i][1],    R_Q[i][2], R_Q[i][3], 
                     R_K[j][0],    R_K[j][1], 
@@ -345,8 +381,10 @@ flash_attn_mma_stages_split_kv_kernel(half* Q,
     // |  [64,64]  |    warp_KV 0    |    warp_KV 1    |    warp_KV 2    |    warp_KV 3    |
     // | warp_QP 0 |-- MMA 0,MMA 0 --|-- MMA 2,MMA 2 --|-- MMA 4,MMA 4 --|-- MMA 6,MMA 6 --| row max
     // | warp_QP 0 |-- MMA 0,MMA 0 --|-- MMA 2,MMA 2 --|-- MMA 4,MMA 4 --|-- MMA 6,MMA 6 --| row max
+    //             |-- (tid:0-31)  --|-- (tid:64-95) --|--(tid:128-159)--|--(tid:192-223)--|
     // | warp_QP 1 |-- MMA 1,MMA 1 --|-- MMA 3,MMA 3 --|-- MMA 5,MMA 5 --|-- MMA 7,MMA 7 --| row max
     // | warp_QP 1 |-- MMA 1,MMA 1 --|-- MMA 3,MMA 3 --|-- MMA 5,MMA 5 --|-- MMA 7,MMA 7 --| row max
+    //             |-- (tid:32-63) --|-- (tid:96-127)--|--(tid:160-191)--|--(tid:224-255)--|
 
     // Online safe softmax, warp/block reduce max/sum, row wise
     // warp 0/2/4/6, [0][2] row 0~15,  col 0/8/16/32, max, [1][2] row 16~31, col 0/8/16/32, max
@@ -407,6 +445,10 @@ flash_attn_mma_stages_split_kv_kernel(half* Q,
     float wrp_row_max_new = (
       block_row_max_new_smem[tid / kMmaTileSeqLenK][tid % kMmaTileSeqLenK]); // [0~63][0~4]
     float blk_row_max_new = warp_reduce_max<float, 4>(wrp_row_max_new);
+    // if  (blockIdx.x == 0) 
+    // {
+    //   printf("tid:%d,x:%d,y:%d,wrp_row_max_new:%f,blk_row_max_new:%f,blockIdx.x:%d.\n",tid, tid / kMmaTileSeqLenK, tid % kMmaTileSeqLenK, wrp_row_max_new, blk_row_max_new, blockIdx.x);
+    // }
     block_row_max_new_smem[tid / kMmaTileSeqLenK][tid % kMmaTileSeqLenK] = (
       blk_row_max_new);
     __syncthreads();
@@ -782,6 +824,7 @@ void launch_flash_attn_mma_stages_split_kv(
   // Tr(=N/Br), batch_size x num_heads
   dim3 grid(div_ceil(QKV_seqlen, Br), QKV_batch * QKV_head); 
   dim3 block(kNumThreads); // 4/8 warps per block
+  printf("Grid: (%d, %d, %d), Block: (%d, %d, %d), smem_max_size:%d.\n", grid.x, grid.y, grid.z, block.x, block.y, block.z, smem_max_size);
 
   cudaFuncSetAttribute(
     flash_attn_mma_stages_split_kv_kernel<
