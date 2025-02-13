@@ -24,6 +24,7 @@ struct __align__(8) MD { float m; float d; };
 template<const int kWarpSize = WARP_SIZE >
 __device__ __forceinline__ MD warp_reduce_md_op(MD value) {
   unsigned int mask = 0xffffffff;
+
   #pragma unroll
   for(int stride = kWarpSize >> 1; stride >= 1; stride >>= 1) {
     MD other;
@@ -34,6 +35,15 @@ __device__ __forceinline__ MD warp_reduce_md_op(MD value) {
     MD bigger_m = value_bigger ? value : other;
     MD smaller_m = value_bigger ? other : value;
     
+    float tmp = bigger_m.d + smaller_m.d * __expf(smaller_m.m - bigger_m.m);
+    // if ((threadIdx.x == 0 or threadIdx.x == 1)and  blockIdx.x == 0) {
+    if (blockIdx.x == 0) {
+      printf("tid:%d,stride:%d,value.m:%f,value.d,%f,other.m:%f,other.d:%f,bigger_m.d:%f,smaller_m.d:%f,new_d:%f.\n", threadIdx.x, stride, value.m, value.d, other.m, other.d, bigger_m.d, smaller_m.d,tmp);
+      printf("exp(-10):%.20f, exp(-15):%.20f, exp(-31):%.20f.\n", __expf(-10), __expf(-15), __expf(-31));
+    }
+
+    // d(k) = [d(k-1)*exp(m(k-1) - m(k))]  +  [exp(x(k) - m(k))]
+    // [exp(x(k) - m(k))] =  bigger_m.d
     value.d = bigger_m.d + smaller_m.d * __expf(smaller_m.m - bigger_m.m);
     value.m = bigger_m.m;
   }
@@ -145,6 +155,7 @@ __global__ void softmax_f32x4_kernel(float* x, float* y, float* total, int N) {
   }
 }
 
+// 核心是每个Block算一行softmax，Grid完成所有的行。
 // NOTE: softmax per-token
 // Softmax x: (S,h), y: (S,h)
 // grid(S*h/h), block(h), assume h<=1024
@@ -155,6 +166,10 @@ __global__ void softmax_f32_per_token_kernel(float* x, float* y, int N) {
   const int tid = threadIdx.x;
   const int idx = blockIdx.x * blockDim.x + tid; 
   
+  // if (tid == 0) {
+  //   printf("N:%d, blockIdx.x：%d, gridDim.x:%d, blockDim.x:%d\n", N, blockIdx.x, gridDim.x, blockDim.x);
+  // }
+
   float exp_val = (idx < N) ? expf(x[idx]) : 0.0f;
   float exp_sum = block_reduce_sum_f32<NUM_THREADS>(exp_val); // block sum
   // e^x_i/sum(e^x_0,...,e^x_n-1) 
@@ -323,12 +338,14 @@ __global__ void online_safe_softmax_f32_per_token_kernel(const float* x, float* 
   val.m = global_tid < N ? x[global_tid] : -FLT_MAX;
   val.d = global_tid < N ? 1.0f : 0.0f;
 
+  // 针对WARP_SIZE（32）的线程进行归约 
   __shared__ MD shared[WAPR_NUM]; 
   MD res = warp_reduce_md_op<WARP_SIZE>(val);
 
   if (lane_id == 0) shared[warp_id] = res; 
   __syncthreads();
 
+  // 使用前32个线程，对BLOCK的计算结果进行归约
   if (local_tid < WARP_SIZE) {
     MD block_res = shared[local_tid];
     block_res = warp_reduce_md_op<WAPR_NUM>(block_res); 
@@ -360,7 +377,6 @@ __global__ void online_safe_softmax_f32x4_pack_per_token_kernel(float *x, float 
     float local_m = fmaxf(fmaxf(val.x, val.y), fmaxf(val.z, val.w));
     float local_d = __expf(val.x - local_m) + __expf(val.y - local_m) + __expf(val.z - local_m) + __expf(val.w - local_m);
 
-    
     MD local_md = {local_m, local_d};
     MD res = warp_reduce_md_op<WARP_SIZE>(local_md);
     __shared__ MD shared[WAPR_NUM];
