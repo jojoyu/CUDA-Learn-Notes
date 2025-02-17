@@ -10,7 +10,7 @@
       <img src=https://img.shields.io/github/watchers/DefTruth/CUDA-Learn-Notes?color=9cc >
       <img src=https://img.shields.io/github/forks/DefTruth/CUDA-Learn-Notes.svg?style=social >
       <img src=https://img.shields.io/github/stars/DefTruth/CUDA-Learn-Notes.svg?style=social >
-      <img src=https://img.shields.io/badge/Release-v2.6-brightgreen.svg >
+      <img src=https://img.shields.io/badge/Release-v3.0.0-brightgreen.svg >
       <img src=https://img.shields.io/badge/License-GPLv3.0-turquoise.svg >
  </div>
 </div>
@@ -53,7 +53,7 @@ Currently, on NVIDIA L20, RTX 4090 and RTX 3080 Laptop, compared with cuBLAS's d
 |✔️WMMA(m16n16k16)|✔️MMA(m16n8k16)|✔️Pack LDST(128 bits)|✔️SMEM Padding|
 |✔️Copy Async|✔️Tile MMAs|✔️Tile Warps|✔️**Multi Stages(2~4)**|  
 |✔️Register Double Buffers|✔️**Block Swizzle**|✔️**Warp Swizzle**|✔️**SMEM Swizzle**(CuTe/MMA)|
-|✔️Collective Store(Shfl)|✔️Row Major(NN)|✔️Col Major(TN)|✔️SGEMM FP32/TF32|
+|✔️Collective Store(Shfl)|✔️Layout NN|✔️Layout TN|✔️SGEMM FP32/TF32|
 
 ## 📖 FA2-MMA Benchmark 🎉🎉 
 
@@ -420,6 +420,7 @@ The kernels listed here will guide you through a step-by-step progression, rangi
 
 |📖 类型-标题|📖 作者| 📖 推荐 |  
 |:---|:---|:---|    
+|[[CUDA基础][开篇]📖CUDA-Learn-Notes: v3.0 大升级-面试刷题不迷路](https://zhuanlan.zhihu.com/p/19862356369)|@DefTruth|⭐️⭐️⭐⭐️| 
 |[[分布式训推][张量/序列并行]📖图解DeepSpeed-Ulysses&Megatron-LM TP/SP](https://zhuanlan.zhihu.com/p/5750410146)|@DefTruth|⭐️⭐️| 
 |[[VLM推理优化][InternVL系列]📖InternLM2/.../InternVL1.5系列笔记: 核心点解析](https://zhuanlan.zhihu.com/p/702481058)|@DefTruth|⭐️⭐️| 
 |[[LLM推理优化][TensorRT-LLM][5w字]📖TensorRT-LLM部署调优-指北](https://zhuanlan.zhihu.com/p/699333691)|@DefTruth|⭐️⭐️⭐️| 
@@ -543,6 +544,7 @@ The kernels listed here will guide you through a step-by-step progression, rangi
 | [[GPU指令集架构][精解]📖NVidia GPU指令集架构-浮点运算](https://zhuanlan.zhihu.com/p/695667044)|@reed|⭐️⭐️⭐️|
 | [[GPU指令集架构][精解]📖NVidia GPU指令集架构-整数运算](https://zhuanlan.zhihu.com/p/700921948)|@reed|⭐️⭐️⭐️|
 | [[GPU指令集架构][精解]📖NVidia GPU指令集架构-比特和逻辑操作](https://zhuanlan.zhihu.com/p/712356884)|@reed|⭐️⭐️⭐️|
+| [[GPU指令集架构][精解]📖NVidia GPU指令集架构-Warp级和Uniform操作](https://zhuanlan.zhihu.com/p/712357647)|@reed|⭐️⭐️⭐️|
 | [[CUDA优化][入门]📖CUDA（一）：CUDA 编程基础](https://zhuanlan.zhihu.com/p/645330027)|@紫气东来|⭐️⭐️⭐️|
 | [[CUDA优化][入门]📖CUDA（二）：GPU的内存体系及其优化指南](https://zhuanlan.zhihu.com/p/654027980)|@紫气东来|⭐️⭐️⭐️|
 | [[CUDA优化][实践]📖CUDA（三）：通用矩阵乘法：从入门到熟练](https://zhuanlan.zhihu.com/p/657632577)|@紫气东来|⭐️⭐️⭐️|
@@ -597,5 +599,6 @@ How to contribute? Star this repo or check [🌤🌤CONTRIBUTE🎉🎉](https://
 - [cuda_hgemm](https://github.com/Bruce-Lee-LY/cuda_hgemm)
 - [cuda-tensorcore-hgemm](https://github.com/nicolaswilde/cuda-tensorcore-hgemm)
 - [How_to_optimize_in_GPU](https://github.com/Liu-xiandong/How_to_optimize_in_GPU/tree/master/sgemv)
+- [how-to-optim-algorithm-in-cuda](https://github.com/BBuf/how-to-optim-algorithm-in-cuda) 
 - [cute_gemm](https://github.com/weishengying/cute_gemm)
 - [cutlass](https://github.com/NVIDIA/cutlass)
